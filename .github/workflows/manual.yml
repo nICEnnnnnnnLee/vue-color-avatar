@@ -1,0 +1,101 @@
+name: Deploy Document
+
+on:
+  workflow_dispatch:
+    inputs:
+      nothing:
+        description: 'This param do nothing'     
+        required: false
+        type: boolean
+        default: true
+        
+# 设置 GITHUB_TOKEN 的权限，以允许部署到 GitHub Pages
+permissions: write-all
+  #contents: read
+  #pages: write
+  #id-token: write
+
+jobs:
+  # 构建工作
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # https://stackoverflow.com/questions/60868897/git-log-dates-incorrect-in-a-github-action
+          fetch-depth: '0'
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+        
+      - name: zip and upload to Github assets
+        env:
+            REPO: "nICEnnnnnnnLee/vue-color-avatar"
+            TAG: "V0.1"
+            TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            ASSET_NAME: "vue-color-avatar.zip"
+            FILE_PATH: "vue-color-avatar.zip"
+        run: |
+            zip -r vue-color-avatar.zip dist/
+            # Step 1: Get the Release ID
+            RELEASE_URL="https://api.github.com/repos/${REPO}/releases/tags/${TAG}"
+            RELEASE_ID=$(curl -s -H "Accept: application/vnd.github+json" -H "Authorization: token ${TOKEN}" "${RELEASE_URL}" | jq -r '.id')
+
+            if [[ -z "$RELEASE_ID" ]]; then
+              echo "Error: Release ${TAG} not found."
+              exit 1
+            fi
+
+            # Step 2: List existing assets
+            ASSETS_URL="https://api.github.com/repos/${REPO}/releases/${RELEASE_ID}/assets"
+            ASSETS=$(curl -s -H "Authorization: token ${TOKEN}" "${ASSETS_URL}")
+
+            # Step 3: Check if the asset exists and delete it
+            ASSET_ID=$(echo "$ASSETS" | jq --arg ASSET_NAME "$ASSET_NAME" -r '.[] | select(.name == $ASSET_NAME) | .id') 
+            if [[ -n "$ASSET_ID" ]]; then
+                DELETE_URL="https://api.github.com/repos/${REPO}/releases/assets/${ASSET_ID}"
+                curl -s -X DELETE -H "Authorization: token ${TOKEN}" "${DELETE_URL}"
+                if [[ $? -ne 0 ]]; then
+                  echo "Error: Failed to delete existing asset ${ASSET_NAME}."
+                  exit 1
+                fi
+                echo "Existing asset ${ASSET_NAME} deleted."
+            fi
+
+            # Step 4: Upload the new asset
+            UPLOAD_URL="https://uploads.github.com/repos/${REPO}/releases/${RELEASE_ID}/assets?name=${ASSET_NAME}"
+            #curl -X POST -H "Authorization: token ${TOKEN}" -H "Content-Type: application/octet-stream" -F "file=@${FILE_PATH}" "${UPLOAD_URL}"
+            curl -X POST -H "Authorization: token ${TOKEN}" -H "Content-Type: application/octet-stream" --data-binary "@${FILE_PATH}" "${UPLOAD_URL}"
+
+            if [[ $? -eq 0 ]]; then
+              echo "Asset ${ASSET_NAME} uploaded successfully."
+            else
+              echo "Error uploading asset ${ASSET_NAME}."
+            fi
+            
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/
+          
+            
+  # 部署工作
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    needs: build
+    runs-on: ubuntu-latest
+    name: Deploy
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+        
+      
